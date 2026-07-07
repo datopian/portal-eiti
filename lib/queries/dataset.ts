@@ -1,78 +1,96 @@
-import { CKAN, Organization, PackageSearchOptions } from "@portaljs/ckan";
-import {
-  CkanResponse,
-  getAvailableOrgs,
-  privateToPublicDatasetName,
-  privateToPublicOrgName,
-  publicToPrivateDatasetName,
-} from "./utils";
-import ky from "ky";
+import { CKAN } from "@portaljs/ckan";
+import { Dataset, PackageSearchOptions } from "@/schemas/dataset.interface";
+import CkanRequest, { CkanResponse } from "@portaljs/ckan-api-client-js";
 
-export async function searchDatasets(input: PackageSearchOptions) {
-  const ckan = new CKAN(process.env.NEXT_PUBLIC_DMS);
-  const mainOrg = process.env.NEXT_PUBLIC_ORG;
-  const mainGroup = `${mainOrg}-group`;
+const DMS = process.env.NEXT_PUBLIC_DMS;
 
-  //  Add the main group prefix before querying
-  if (input.groups) {
-    input.groups = input.groups.map((g) => `${mainGroup}--${g}`);
+export async function searchDatasets(options: PackageSearchOptions) {
+  const baseAction = `package_search`;
+
+  const facetFields = ["groups", "organization", "res_format", "tags"]
+    .map((f) => `"${f}"`)
+    .join(",");
+
+  let queryParams: string[] = [];
+
+  if (options?.query) {
+    queryParams.push(`q=${options.query}`);
   }
 
-  let orgs: string[] = [];
-  if (input.orgs && input.orgs.length > 0) {
-    const mainOrgPrefix = `${mainOrg}--`;
-    orgs = input.orgs?.map((g) => {
-      if (g == mainOrg) {
-        return g;
-      }
-      return `${mainOrgPrefix}${g}`;
-    });
-  } else {
-    orgs = await getAvailableOrgs(mainOrg);
+  if (options?.offset) {
+    queryParams.push(`start=${options.offset}`);
   }
 
-  const datasets = await ckan.packageSearch({
-    ...input,
-    orgs,
-  });
+  if (options?.limit || options?.limit == 0) {
+    queryParams.push(`rows=${options.limit}`);
+  }
 
-  //  Remove the main group prefix from the groups names
-  //  Remove the main org prefix from the owner_org name
-  const results = datasets.datasets.map((d) => {
-    const mainGroupPrefix = `${mainGroup}--`;
-    const mainOrgPrefix = `${mainOrg}--`;
-    const groups = d?.groups?.map((g) => {
-      const name = g.name.slice(mainGroupPrefix.length);
+  if (options?.sort) {
+    queryParams.push(`sort=${options?.sort}`);
+  }
 
-      return { ...g, name };
-    });
-    const owner_org =
-      d.organization.name === mainOrg
-        ? mainOrg
-        : d.organization.name.slice(mainOrgPrefix.length);
-    const organization = { ...d.organization, name: owner_org };
+  let fqList: string[] = [];
 
-    const publicName = privateToPublicDatasetName(d.name, mainOrg);
+  if (options?.fq) {
+    fqList.push(options.fq);
+  }
 
-    return { ...d, organization, name: publicName, groups };
-  });
+  let fqListGroups: string[] = [];
+  if (options?.orgs?.length) {
+    fqListGroups.push(`organization:(${joinTermsWithOr(options?.orgs)})`);
+  }
 
-  return { datasets: results, count: datasets.count };
+  if (options?.groups?.length) {
+    fqListGroups.push(`groups:(${joinTermsWithOr(options?.groups)})`);
+  }
+
+  if (options?.tags?.length) {
+    fqListGroups.push(`tags:(${joinTermsWithOr(options?.tags)})`);
+  }
+
+  if (options?.resFormat?.length) {
+    fqListGroups.push(`res_format:(${joinTermsWithOr(options.resFormat)})`);
+  }
+
+  if (options?.type) {
+    fqListGroups.push(`dataset_type:${options.type}`);
+  }
+
+  if (fqListGroups?.length) {
+    fqList.push(`+(${fqListGroups.join(" AND ")})`);
+  }
+
+  if (fqList?.length) {
+    queryParams.push(`fq=${fqList.join(" ")}`);
+  }
+
+  const action = `${baseAction}?${queryParams.join(
+    "&"
+  )}&facet.field=[${facetFields}]&facet.limit=9999`;
+
+  const res = await CkanRequest.get<
+    CkanResponse<{
+      results: Dataset[];
+      count: number;
+      search_facets: {
+        [k: string]: {
+          title: string;
+          items: { name: string; display_name: string; count: number }[];
+        };
+      };
+    }>
+  >(action, { ckanUrl: DMS });
+
+  return { ...res.result, datasets: res.result.results };
 }
+
+const joinTermsWithOr = (tems) => {
+  return tems.map((t) => `"${t}"`).join(" OR ");
+};
 
 export const getDataset = async ({ name }: { name: string }) => {
   const DMS = process.env.NEXT_PUBLIC_DMS;
-  const mainOrg = process.env.NEXT_PUBLIC_ORG;
   const ckan = new CKAN(DMS);
-  const privateName = publicToPrivateDatasetName(name, mainOrg);
-  const dataset = await ckan.getDatasetDetails(privateName);
-  dataset.name = privateToPublicDatasetName(dataset.name, mainOrg);
-  return {
-    ...dataset,
-    _name: privateName,
-    organization: {
-      ...dataset.organization,
-      name: privateToPublicOrgName(dataset.organization.name, mainOrg),
-    },
-  };
+  const dataset = await ckan.getDatasetDetails(name);
+  return dataset
 };
