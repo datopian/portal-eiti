@@ -31,7 +31,7 @@ export function HomePageStructuredData() {
         url={url}
         potentialActions={[
           {
-            target: `${url}/search?q={search_term_string}`,
+            target: `${url}/search?query={search_term_string}`,
             queryInput: "required name=search_term_string",
           },
         ]}
