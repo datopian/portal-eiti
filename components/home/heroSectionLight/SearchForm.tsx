@@ -12,7 +12,7 @@ const SearchForm: React.FC<{ datasetCount?: number }> = ({ datasetCount }) => {
     }
     router.push({
       pathname: "/search",
-      query: { q: searchQuery },
+      query: { query: searchQuery },
     });
   };
 
